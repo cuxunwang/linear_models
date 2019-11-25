@@ -100,3 +100,157 @@ rmse(wiggly_mod, test_df)
 cv_df = 
   crossv_mc(nonlin_df, 100) 
 ```
+
+one note about resample …
+
+``` r
+cv_df %>% pull(train) %>% .[[3]] %>% as_tibble
+```
+
+    ## # A tibble: 79 x 3
+    ##       id     x      y
+    ##    <int> <dbl>  <dbl>
+    ##  1     1 0.266  1.11 
+    ##  2     2 0.372  0.764
+    ##  3     3 0.573  0.358
+    ##  4     4 0.908 -3.04 
+    ##  5     5 0.202  1.33 
+    ##  6     6 0.898 -1.99 
+    ##  7     7 0.945 -3.27 
+    ##  8    11 0.206  1.63 
+    ##  9    12 0.177  0.836
+    ## 10    13 0.687 -0.291
+    ## # ... with 69 more rows
+
+``` r
+cv_df =
+  cv_df %>% 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble))
+```
+
+Try fitting the linear model to all of these…
+
+``` r
+cv_results = 
+  cv_df %>% 
+  mutate(
+    linear_mods = map(.x = train, ~lm(y ~ x, data = .x)),
+    smooth_mods = map(.x = train, ~gam(y ~ s(x), data = .x)),
+    wiggly_mods =  map(.x = train, ~gam(y ~ s(x, k = 30), sp = 10e-6, data = .x)),
+    rmse_linear = map2_dbl(.x = linear_mods, .y = test, ~rmse(.x, .y)),
+    rmse_smooth = map2_dbl(.x = smooth_mods, .y = test, ~rmse(.x, .y)),
+    rmse_wiggly = map2_dbl(wiggly_mods, test, ~rmse(model = .x, data = .y))
+  )
+```
+
+visualize this.
+
+``` r
+cv_results %>% 
+  select(starts_with("rmse")) %>% 
+  pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") %>% 
+  mutate(model = fct_inorder(model)) %>% 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+```
+
+<img src="cross_validation_files/figure-gfm/unnamed-chunk-10-1.png" width="90%" />
+
+## Child growth
+
+``` r
+child_growth = read_csv("./data/nepalese_children.csv")
+```
+
+    ## Parsed with column specification:
+    ## cols(
+    ##   age = col_double(),
+    ##   sex = col_double(),
+    ##   weight = col_double(),
+    ##   height = col_double(),
+    ##   armc = col_double()
+    ## )
+
+``` r
+child_growth %>% 
+  ggplot(aes(x = weight, y = armc)) + 
+  geom_point()
+```
+
+<img src="cross_validation_files/figure-gfm/unnamed-chunk-12-1.png" width="90%" />
+
+Add change point term
+
+``` r
+child_growth =
+  child_growth %>% 
+  mutate(weight_cp = (weight > 7) * (weight - 7))
+```
+
+Fit models
+
+``` r
+linear_mod = lm(armc ~ weight, data = child_growth)
+pwl_mod    = lm(armc ~ weight + weight_cp, data = child_growth)
+smooth_mod = gam(armc ~ s(weight), data = child_growth)
+```
+
+Make a plot
+
+``` r
+child_growth %>% 
+  gather_predictions(linear_mod, pwl_mod, smooth_mod) %>% 
+  mutate(model = fct_inorder(model)) %>% 
+  ggplot(aes(x = weight, y = armc)) + 
+  geom_point(alpha = .5) +
+  geom_line(aes(y = pred), color = "red") + 
+  facet_grid(~model)
+```
+
+<img src="cross_validation_files/figure-gfm/unnamed-chunk-15-1.png" width="90%" />
+
+Re-use my CV process – first get training / testing splits …
+
+``` r
+cv_df =
+  crossv_mc(child_growth, 100) %>% 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble))
+```
+
+… then fit models and get RMSEs.
+
+``` r
+cv_df = 
+  cv_df %>% 
+  mutate(linear_mod  = map(train, ~lm(armc ~ weight, data = .x)),
+         pwl_mod     = map(train, ~lm(armc ~ weight + weight_cp, data = .x)),
+         smooth_mod  = map(train, ~gam(armc ~ s(weight), data = as_tibble(.x)))) %>% 
+  mutate(rmse_linear = map2_dbl(linear_mod, test, ~rmse(model = .x, data = .y)),
+         rmse_pwl    = map2_dbl(pwl_mod, test, ~rmse(model = .x, data = .y)),
+         rmse_smooth = map2_dbl(smooth_mod, test, ~rmse(model = .x, data = .y)))
+```
+
+Let’s make a plot of the results\!
+
+``` r
+cv_df %>% 
+  select(starts_with("rmse")) %>% 
+pivot_longer(
+    everything(),
+    names_to = "model", 
+    values_to = "rmse",
+    names_prefix = "rmse_") %>% 
+  mutate(model = fct_inorder(model)) %>% 
+  ggplot(aes(x = model, y = rmse)) + geom_violin()
+```
+
+<img src="cross_validation_files/figure-gfm/unnamed-chunk-18-1.png" width="90%" />
+
+So\! Which model is best here …?
